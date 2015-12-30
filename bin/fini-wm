@@ -2,3 +2,145 @@
 
 use strict;
 use warnings;
+use Carp;
+use English;
+#use Data::Dumper;
+use Sys::Hostname;
+use JSON;
+use File::Slurp qw(read_file);
+
+# constants
+my $host = hostname;
+my $meta_dirname = "/etc/fini";
+my $meta_filename = "$meta_dirname/$host.json";
+
+# read arguments
+my $argc = scalar @ARGV;
+die "you need help" unless $argc > 0;
+
+my $command = shift @ARGV;
+
+# pick command
+if ($command eq 'create') {
+	my $usage = "create args: <short_name> <hostname> <owner>";
+
+	my $short_name = shift @ARGV or die "missing short_name... $usage";
+	my $hostname = shift @ARGV or die "missing hostname... $usage";
+	my $owner = shift @ARGV or die "missing owner... $usage";
+	fwm_create($short_name,$hostname,$owner);
+} else {
+	die "$command does not exist";
+}
+
+sub fwm_create {
+	my ($short_name,$hostname,$owner) = @_;
+
+	# read metafile
+	my $meta = fwm_getmeta();
+
+	# add our thing
+	my $site_meta = $meta->{$short_name};
+	unless (defined $site_meta) {
+		print "adding $short_name to meta...\n";
+		my $new_site_meta = {
+			webroot => '/www/' . $short_name,
+			docroot => '/www/' . $short_name . '/docroot',
+			logdir => '/var/log/httpd/' . $short_name,
+			certdir => '/etc/httpd/certs/' . $short_name,
+			configfile => '/etc/httpd/conf.d/' . $short_name . '.conf',
+			hostname => $hostname,
+			owner => $owner,
+		};
+		$site_meta = $meta->{$short_name} = $new_site_meta;
+	} else {
+		print "$short_name ALREADY in meta...\n";
+		die "no webroot" unless defined $site_meta->{webroot};
+		die "no docroot" unless defined $site_meta->{docroot};
+		die "no logdir" unless defined $site_meta->{logdir};
+	}
+
+	# write metafile
+	write_json($meta_filename,$meta);
+
+	# create directories
+	unless (-d '/www/') {
+		print "no websites yet on this host...\n";
+		system("sudo mkdir /www") and die "mkdir /www failed";
+	}
+
+	# root-owned directories
+	foreach my $logdir ($site_meta->{logdir}, $site_meta->{webroot}) {
+		unless (-d $logdir) {
+			print "mkdir($logdir)...\n";
+			system("sudo mkdir $logdir") and die "mkdir $logdir failed";
+		}
+
+		unless (-r $logdir) {
+			die "$logdir unreadable";
+		}
+	}
+
+	# user-owned directories
+	foreach my $userdir ($site_meta->{docroot}, $site_meta->{certdir}) {
+		unless (-d $userdir) {
+			print "mkdir($userdir)...\n";
+			system("sudo mkdir $userdir") and die "mkdir $userdir failed";
+		}
+
+		my $owner = $site_meta->{owner};
+
+		unless (-w $userdir) {
+			print "chown($owner,$userdir)...\n";
+			system("sudo chown $owner $userdir") and die "chown $owner $userdir failed";
+		}
+	}
+
+	# download first cert
+	die "unimplemented";
+
+	# template httpd site config file
+	die "unimplemented";
+}
+
+sub fwm_getmeta {
+	# dir
+	unless (-d $meta_dirname) {
+		print "missing $meta_dirname...\n";
+		system("sudo mkdir $meta_dirname") and die "mkdir failed";
+	}
+
+	# metafile
+	unless (-e $meta_filename) {
+		print "touching $meta_filename...\n";
+		system("sudo touch $meta_filename") and die "touch failed";
+	}
+
+	unless (-w $meta_filename) {
+		system("sudo chown chicks.chicks $meta_filename $meta_dirname") and die "chown failed";
+	}
+
+	# read/parse file
+	my $raw_json = read_file($meta_filename);
+	unless (length $raw_json) {
+		print "empty meta $meta_filename...\n";
+		return {};
+	}
+	my $json = JSON->new->allow_nonref; # no html fiddling, brilliant!
+	my $meta = $json->decode($raw_json);
+
+	return $meta;
+}
+
+sub write_json {
+	my ( $filename, $data ) = @_;
+	my $json     = JSON->new->allow_nonref;
+	my $json_out = $json->pretty->canonical->allow_blessed->encode($data);
+	my $json_fh;
+	open( $json_fh, ">:utf8", $filename ) or croak "could not open $filename for write: $ERRNO";
+	print $json_fh $json_out;
+	close($json_fh);
+	my $size = -s $filename;
+	print "wrote $filename ($size bytes)\n";
+	return $size;
+}
+
