@@ -28,6 +28,8 @@ if ($command eq 'create') {
 	my $hostname = shift @ARGV or die "missing hostname... $usage";
 	my $owner = shift @ARGV or die "missing owner... $usage";
 	fwm_create($short_name,$hostname,$owner);
+} elsif ($command eq 'certrenew') {
+	fwm_certrenew();
 } else {
 	die "$command does not exist";
 }
@@ -96,10 +98,34 @@ sub fwm_create {
 	}
 
 	# download first cert
-	die "unimplemented";
+	fwm_getcert($site_meta);
 
 	# template httpd site config file
 	die "unimplemented";
+}
+
+sub fwm_getcert {
+	my ($site_meta) = @_;
+
+	# cd($certdir)
+	my $certdir = $site_meta->{certdir};
+	unless (-d $certdir and -w $certdir) {
+		die "invalid certificate dir $certdir";
+	}
+	chdir($certdir) or die "failed cd($certdir): $!";
+
+	# get cert
+	my $hostname = $site_meta->{hostname};
+	my $docroot = $site_meta->{docroot};
+	my $command = "simp_le -d $hostname:$docroot -f account_key.json "
+		. ' -f key.pem -f cert.pem -f fullchain.pem --email chicks.net@gmail.com';
+	print "running $command ...\n";
+
+	die "unimplemented getcert()";
+}
+
+sub fwm_certrenew {
+	die "unimplemented fwm_certrenew()";
 }
 
 sub fwm_getmeta {
