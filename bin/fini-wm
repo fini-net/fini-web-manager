@@ -7,12 +7,15 @@ use English;
 #use Data::Dumper;
 use Sys::Hostname;
 use JSON;
-use File::Slurp qw(read_file);
+use File::Slurp qw(read_file write_file);
+use Mojo::Template;
 
 # constants
 my $host = hostname;
 my $meta_dirname = "/etc/fini";
 my $meta_filename = "$meta_dirname/$host.json";
+my $default_owner = 'chicks.chicks';
+my $default_email = 'chicks.net@gmail.com';
 
 # read arguments
 my $argc = scalar @ARGV;
@@ -52,6 +55,7 @@ sub fwm_create {
 			configfile => '/etc/httpd/conf.d/' . $short_name . '.conf',
 			hostname => $hostname,
 			owner => $owner,
+			short_name => $short_name,
 		};
 		$site_meta = $meta->{$short_name} = $new_site_meta;
 	} else {
@@ -73,7 +77,7 @@ sub fwm_create {
 	# root-owned directories
 	foreach my $logdir ($site_meta->{logdir}, $site_meta->{webroot}) {
 		unless (-d $logdir) {
-			print "mkdir($logdir)...\n";
+			print "mkdir($logdir) root...\n";
 			system("sudo mkdir $logdir") and die "mkdir $logdir failed";
 		}
 
@@ -97,11 +101,34 @@ sub fwm_create {
 		}
 	}
 
+	# template httpd site config file
+	fwm_httpd_template($site_meta);
+
 	# download first cert
 	fwm_getcert($site_meta);
+}
 
-	# template httpd site config file
-	die "unimplemented";
+sub fwm_httpd_template {
+	my($site_meta) = @_;
+	my $configfile = $site_meta->{configfile};
+
+	my $template = '';
+	do { $template .= $_ } while ( <DATA> ); 
+
+	# process template
+	my $mt = Mojo::Template->new;
+	my $filledin_config = $mt->render($template,$site_meta);
+	my $config_size = length $filledin_config;
+
+	unless (-e $configfile) {
+		# just create it
+		touch($configfile,$default_owner);
+		print "writing $config_size bytes to $configfile...\n";
+		write_file($configfile,$filledin_config);
+	} else {
+		# compare to existing
+		die "implement: compare to existing"; # TODO
+	}
 }
 
 sub fwm_getcert {
@@ -118,7 +145,7 @@ sub fwm_getcert {
 	my $hostname = $site_meta->{hostname};
 	my $docroot = $site_meta->{docroot};
 	my $command = "simp_le -d $hostname:$docroot -f account_key.json "
-		. ' -f key.pem -f cert.pem -f fullchain.pem --email chicks.net@gmail.com';
+		. ' -f key.pem -f cert.pem -f fullchain.pem --email ' . $default_email;
 	print "running $command ...\n";
 
 	die "unimplemented getcert()";
@@ -133,16 +160,16 @@ sub fwm_getmeta {
 	unless (-d $meta_dirname) {
 		print "missing $meta_dirname...\n";
 		system("sudo mkdir $meta_dirname") and die "mkdir failed";
+		system("sudo chown $default_owner $meta_dirname") and die "chown failed";
 	}
 
 	# metafile
 	unless (-e $meta_filename) {
-		print "touching $meta_filename...\n";
-		system("sudo touch $meta_filename") and die "touch failed";
+		touch($meta_filename,$default_owner);
 	}
 
 	unless (-w $meta_filename) {
-		system("sudo chown chicks.chicks $meta_filename $meta_dirname") and die "chown failed";
+		die "odd, I can't write to $meta_filename";
 	}
 
 	# read/parse file
@@ -155,6 +182,16 @@ sub fwm_getmeta {
 	my $meta = $json->decode($raw_json);
 
 	return $meta;
+}
+
+sub touch {
+	my ($filename,$owner) = @_;
+
+	unless (-e $filename) {
+		print "touching $filename (for $owner)...\n";
+		system("sudo touch $filename") and die "touch failed";
+		system("sudo chown $owner $filename") and die "touch failed";
+	}
 }
 
 sub write_json {
@@ -170,3 +207,147 @@ sub write_json {
 	return $size;
 }
 
+__DATA__
+% my ($site_meta) = @_;
+% my $docroot = $site_meta->{docroot};
+% my $certdir = $site_meta->{certdir};
+% my $hostname = $site_meta->{hostname};
+% my $short_name = $site_meta->{short_name};
+#
+# When we also provide SSL we have to listen to the
+# the HTTPS port in addition.
+#
+#Listen 443 https
+<Directory "<%= $docroot %>">
+	AllowOverride FileInfo AuthConfig Limit Indexes
+	Options MultiViews Indexes SymLinksIfOwnerMatch IncludesNoExec
+	Require method GET POST OPTIONS
+	SSLOptions +StdEnvVars
+</Directory>
+
+<VirtualHost _default_:80>
+	ServerName <%= $hostname %>
+	ErrorLog logs/<%= $short_name %>/error_log
+	TransferLog logs/<%= $short_name %>/access_log
+
+	DocumentRoot "<%= $docroot %>"
+</VirtualHost>
+
+
+<VirtualHost _default_:443>
+	ServerName <%= $hostname %>:443
+
+	DocumentRoot "<%= $docroot %>"
+
+	# Use separate log files for the SSL virtual host; note that LogLevel
+	# is not inherited from httpd.conf.
+	ErrorLog logs/<%= $short_name %>/ssl_error_log
+	TransferLog logs/<%= $short_name %>/ssl_access_log
+	LogLevel warn
+
+	#   SSL Engine Switch:
+	SSLEngine on
+
+	#   SSL Protocol support:
+	SSLProtocol all -SSLv2
+
+	#   SSL Cipher Suite:
+	SSLCipherSuite HIGH:MEDIUM:!aNULL:!MD5
+
+	#   Server Certificate:
+	SSLCertificateFile <%= $certdir %>/cert.pem
+
+	#   Server Private Key:
+	SSLCertificateKeyFile <%= $certdir %>/key.pem
+
+	#   Server Certificate Chain:
+	SSLCertificateChainFile <%= $certdir %>/fullchain.pem
+
+	#   Certificate Authority (CA):
+	#SSLCACertificateFile /etc/pki/tls/certs/ca-bundle.crt
+
+	#   Access Control:
+	#   With SSLRequire you can do per-directory access control based
+	#   on arbitrary complex boolean expressions containing server
+	#   variable checks and other lookup directives.  The syntax is a
+	#   mixture between C and Perl.  See the mod_ssl documentation
+	#   for more details.
+	#<Location />
+	#SSLRequire (    %{SSL_CIPHER} !~ m/^(EXP|NULL)/ \\
+	#            and %{SSL_CLIENT_S_DN_O} eq "Snake Oil, Ltd." \\
+	#            and %{SSL_CLIENT_S_DN_OU} in {"Staff", "CA", "Dev"} \\
+	#            and %{TIME_WDAY} >= 1 and %{TIME_WDAY} <= 5 \\
+	#            and %{TIME_HOUR} >= 8 and %{TIME_HOUR} <= 20       ) \\
+	#           or %{REMOTE_ADDR} =~ m/^192\.76\.162\.[0-9]+$/
+	#</Location>
+
+	#   SSL Engine Options:
+	#   Set various options for the SSL engine.
+	#   o FakeBasicAuth:
+	#     Translate the client X.509 into a Basic Authorisation.  This means that
+	#     the standard Auth/DBMAuth methods can be used for access control.  The
+	#     user name is the `one line' version of the client's X.509 certificate.
+	#     Note that no password is obtained from the user. Every entry in the user
+	#     file needs this password: `xxj31ZMTZzkVA'.
+	#   o ExportCertData:
+	#     This exports two additional environment variables: SSL_CLIENT_CERT and
+	#     SSL_SERVER_CERT. These contain the PEM-encoded certificates of the
+	#     server (always existing) and the client (only existing when client
+	#     authentication is used). This can be used to import the certificates
+	#     into CGI scripts.
+	#   o StdEnvVars:
+	#     This exports the standard SSL/TLS related `SSL_*' environment variables.
+	#     Per default this exportation is switched off for performance reasons,
+	#     because the extraction step is an expensive operation and is usually
+	#     useless for serving static content. So one usually enables the
+	#     exportation for CGI and SSI requests only.
+	#   o StrictRequire:
+	#     This denies access when "SSLRequireSSL" or "SSLRequire" applied even
+	#     under a "Satisfy any" situation, i.e. when it applies access is denied
+	#     and no other module can change it.
+	#   o OptRenegotiate:
+	#     This enables optimized SSL connection renegotiation handling when SSL
+	#     directives are used in per-directory context.
+	#SSLOptions +FakeBasicAuth +ExportCertData +StrictRequire
+	<Files ~ "\.(cgi|shtml|phtml|php3?)$">
+	    SSLOptions +StdEnvVars
+	</Files>
+	<Directory "/var/www/cgi-bin">
+	    SSLOptions +StdEnvVars
+	</Directory>
+
+	#   SSL Protocol Adjustments:
+	#   The safe and default but still SSL/TLS standard compliant shutdown
+	#   approach is that mod_ssl sends the close notify alert but doesn't wait for
+	#   the close notify alert from client. When you need a different shutdown
+	#   approach you can use one of the following variables:
+	#   o ssl-unclean-shutdown:
+	#     This forces an unclean shutdown when the connection is closed, i.e. no
+	#     SSL close notify alert is send or allowed to received.  This violates
+	#     the SSL/TLS standard but is needed for some brain-dead browsers. Use
+	#     this when you receive I/O errors because of the standard approach where
+	#     mod_ssl sends the close notify alert.
+	#   o ssl-accurate-shutdown:
+	#     This forces an accurate shutdown when the connection is closed, i.e. a
+	#     SSL close notify alert is send and mod_ssl waits for the close notify
+	#     alert of the client. This is 100% SSL/TLS standard compliant, but in
+	#     practice often causes hanging connections with brain-dead browsers. Use
+	#     this only for browsers where you know that their SSL implementation
+	#     works correctly.
+	#   Notice: Most problems of broken clients are also related to the HTTP
+	#   keep-alive facility, so you usually additionally want to disable
+	#   keep-alive for those clients, too. Use variable "nokeepalive" for this.
+	#   Similarly, one has to force some clients to use HTTP/1.0 to workaround
+	#   their broken HTTP/1.1 implementation. Use variables "downgrade-1.0" and
+	#   "force-response-1.0" for this.
+	BrowserMatch "MSIE [2-5]" \\
+		 nokeepalive ssl-unclean-shutdown \\
+		 downgrade-1.0 force-response-1.0
+
+	#   Per-Server Logging:
+	#   The home of a custom SSL log file. Use this when you want a
+	#   compact non-error SSL logfile on a virtual host basis.
+	CustomLog logs/<%= $short_name %>/ssl_request_log \\
+		  "%t %h %{SSL_PROTOCOL}x %{SSL_CIPHER}x \"%r\" %b"
+
+</VirtualHost>
