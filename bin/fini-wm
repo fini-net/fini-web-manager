@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 # TODO: test on a fresh machine
 # TODO: handle IP's
+# TODO: restart apache
 
 use strict;
 use warnings;
@@ -187,7 +188,12 @@ sub fwm_getcert {
 }
 
 sub fwm_certrenew {
-	die "unimplemented fwm_certrenew()"; # TODO
+	my $meta = fwm_getmeta();
+
+	foreach my $short_name (keys %$meta) {
+		my $site_meta = $meta->{$short_name};
+		fwm_getcert($site_meta);
+	}
 }
 
 sub fwm_getmeta {
