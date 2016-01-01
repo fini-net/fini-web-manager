@@ -25,7 +25,7 @@ my $usage = "command missing, usage:\n";
 $usage .= "\tfini-wm <command> <args>\n";
 $usage .= "commands are create or certrenew\n";
 my $argc = scalar @ARGV;
-die $usage unless $argc > 0;
+croak $usage unless $argc > 0;
 
 my $command = shift @ARGV;
 
@@ -33,14 +33,14 @@ my $command = shift @ARGV;
 if ($command eq 'create') {
 	my $usage = "create args: <short_name> <hostname> <owner>";
 
-	my $short_name = shift @ARGV or die "missing short_name... $usage";
-	my $hostname = shift @ARGV or die "missing hostname... $usage";
-	my $owner = shift @ARGV or die "missing owner... $usage";
+	my $short_name = shift @ARGV or croak "missing short_name... $usage";
+	my $hostname = shift @ARGV or croak "missing hostname... $usage";
+	my $owner = shift @ARGV or croak "missing owner... $usage";
 	fwm_create($short_name,$hostname,$owner);
 } elsif ($command eq 'certrenew') {
 	fwm_certrenew();
 } else {
-	die "$command does not exist";
+	croak "$command does not exist";
 }
 
 sub fwm_create {
@@ -66,9 +66,9 @@ sub fwm_create {
 		$site_meta = $meta->{$short_name} = $new_site_meta;
 	} else {
 		print "$short_name ALREADY in meta...\n";
-		die "no webroot" unless defined $site_meta->{webroot};
-		die "no docroot" unless defined $site_meta->{docroot};
-		die "no logdir" unless defined $site_meta->{logdir};
+		croak "no webroot" unless defined $site_meta->{webroot};
+		croak "no docroot" unless defined $site_meta->{docroot};
+		croak "no logdir" unless defined $site_meta->{logdir};
 	}
 
 	# write metafile
@@ -77,18 +77,18 @@ sub fwm_create {
 	# create directories
 	unless (-d '/www/') {
 		print "no websites yet on this host...\n";
-		system("sudo mkdir /www") and die "mkdir /www failed";
+		system("sudo mkdir /www") and croak "mkdir /www failed";
 	}
 
 	# root-owned directories
 	foreach my $logdir ($site_meta->{logdir}, $site_meta->{webroot}) {
 		unless (-d $logdir) {
 			print "mkdir($logdir) root...\n";
-			system("sudo mkdir $logdir") and die "mkdir $logdir failed";
+			system("sudo mkdir $logdir") and croak "mkdir $logdir failed";
 		}
 
 		unless (-r $logdir) {
-			die "$logdir unreadable";
+			croak "$logdir unreadable";
 		}
 	}
 
@@ -96,14 +96,14 @@ sub fwm_create {
 	foreach my $userdir ($site_meta->{docroot}, $site_meta->{certdir}) {
 		unless (-d $userdir) {
 			print "mkdir($userdir)...\n";
-			system("sudo mkdir $userdir") and die "mkdir $userdir failed";
+			system("sudo mkdir $userdir") and croak "mkdir $userdir failed";
 		}
 
 		my $owner = $site_meta->{owner};
 
 		unless (-w $userdir) {
 			print "chown($owner,$userdir)...\n";
-			system("sudo chown $owner $userdir") and die "chown $owner $userdir failed";
+			system("sudo chown $owner $userdir") and croak "chown $owner $userdir failed";
 		}
 	}
 
@@ -112,6 +112,8 @@ sub fwm_create {
 
 	# download first cert
 	fwm_getcert($site_meta);
+
+	print "$short_name/$hostname created!\n";
 }
 
 sub fwm_httpd_template {
@@ -175,10 +177,13 @@ sub fwm_getcert {
 	my $docroot = $site_meta->{docroot};
 	my $command = "simp_le -d $hostname:$docroot -f account_key.json "
 		. ' -f key.pem -f cert.pem -f fullchain.pem --email ' . $default_email;
-	print "running $command ...\n";
 
-	die "unimplemented getcert()"; # TODO
-	system($command) and croak "simp_le failed";
+	unless ($hostname =~ /example.com/ or $site_meta->{short_name} eq 'foo') {
+		print "running $command ...\n";
+		system($command) and croak "simp_le failed";
+	} else {
+		print "SKIPPING $command\n";
+	}
 }
 
 sub fwm_certrenew {
