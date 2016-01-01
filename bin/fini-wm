@@ -1,4 +1,6 @@
 #!/usr/bin/perl
+# TODO: test on a fresh machine
+# TODO: handle IP's
 
 use strict;
 use warnings;
@@ -8,6 +10,7 @@ use English;
 use Sys::Hostname;
 use JSON;
 use File::Slurp qw(read_file write_file);
+use IO::Prompt;
 use Mojo::Template;
 
 # constants
@@ -18,8 +21,11 @@ my $default_owner = 'chicks.chicks';
 my $default_email = 'chicks.net@gmail.com';
 
 # read arguments
+my $usage = "command missing, usage:\n";
+$usage .= "\tfini-wm <command> <args>\n";
+$usage .= "commands are create or certrenew\n";
 my $argc = scalar @ARGV;
-die "you need help" unless $argc > 0;
+die $usage unless $argc > 0;
 
 my $command = shift @ARGV;
 
@@ -112,8 +118,11 @@ sub fwm_httpd_template {
 	my($site_meta) = @_;
 	my $configfile = $site_meta->{configfile};
 
-	my $template = '';
-	do { $template .= $_ } while ( <DATA> ); 
+	my $template;
+	{
+		local $/ = undef;
+		$template = <DATA>;
+	}
 
 	# process template
 	my $mt = Mojo::Template->new;
@@ -127,7 +136,27 @@ sub fwm_httpd_template {
 		write_file($configfile,$filledin_config);
 	} else {
 		# compare to existing
-		die "implement: compare to existing"; # TODO
+		my $tempconfig = $configfile . '.new';
+		touch($tempconfig,$default_owner);
+		print "writing $config_size bytes to $tempconfig...\n";
+		write_file($tempconfig,$filledin_config);
+		print "\n";
+		my $diff_ret = system("colordiff -c $configfile $tempconfig");
+
+		$diff_ret = $diff_ret >> 8; # shift away flags
+		unless ($diff_ret) {
+			print "no change, deleting $tempconfig...\n";
+			system("sudo rm $tempconfig") and croak "sudo(rm $tempconfig) failed";
+		} else {
+			print "\n";
+			if (prompt "replace config?", -yn1) {
+				system("sudo mv $tempconfig $configfile") and croak "sudo(mv $tempconfig $configfile) failed";
+				print "$configfile replaced with new\n";
+			} else {
+				system("sudo rm $tempconfig") and croak "sudo(rm $tempconfig) failed";
+				print "old $configfile kept\n";
+			}
+		}
 	}
 }
 
@@ -137,9 +166,9 @@ sub fwm_getcert {
 	# cd($certdir)
 	my $certdir = $site_meta->{certdir};
 	unless (-d $certdir and -w $certdir) {
-		die "invalid certificate dir $certdir";
+		croak "invalid certificate dir $certdir";
 	}
-	chdir($certdir) or die "failed cd($certdir): $!";
+	chdir($certdir) or croak "failed cd($certdir): $!";
 
 	# get cert
 	my $hostname = $site_meta->{hostname};
@@ -148,19 +177,20 @@ sub fwm_getcert {
 		. ' -f key.pem -f cert.pem -f fullchain.pem --email ' . $default_email;
 	print "running $command ...\n";
 
-	die "unimplemented getcert()";
+	die "unimplemented getcert()"; # TODO
+	system($command) and croak "simp_le failed";
 }
 
 sub fwm_certrenew {
-	die "unimplemented fwm_certrenew()";
+	die "unimplemented fwm_certrenew()"; # TODO
 }
 
 sub fwm_getmeta {
 	# dir
 	unless (-d $meta_dirname) {
 		print "missing $meta_dirname...\n";
-		system("sudo mkdir $meta_dirname") and die "mkdir failed";
-		system("sudo chown $default_owner $meta_dirname") and die "chown failed";
+		system("sudo mkdir $meta_dirname") and croak "mkdir failed";
+		system("sudo chown $default_owner $meta_dirname") and croak "chown failed";
 	}
 
 	# metafile
@@ -169,7 +199,7 @@ sub fwm_getmeta {
 	}
 
 	unless (-w $meta_filename) {
-		die "odd, I can't write to $meta_filename";
+		croak "odd, I can't write to $meta_filename";
 	}
 
 	# read/parse file
@@ -189,8 +219,8 @@ sub touch {
 
 	unless (-e $filename) {
 		print "touching $filename (for $owner)...\n";
-		system("sudo touch $filename") and die "touch failed";
-		system("sudo chown $owner $filename") and die "touch failed";
+		system("sudo touch $filename") and croak "touch failed";
+		system("sudo chown $owner $filename") and croak "touch failed";
 	}
 }
 
