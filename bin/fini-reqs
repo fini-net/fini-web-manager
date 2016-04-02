@@ -1,0 +1,33 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Carp;
+use English;
+#use Data::Dumper;
+use Sys::Hostname;
+use JSON;
+use File::Slurp qw(read_file write_file);
+#use IO::Prompt;
+#use Mojo::Template;
+use AppConfig;
+
+# constants
+my $host = hostname;
+my $meta_dirname = "/etc/fini";
+my $meta_filename = "$meta_dirname/$host.json";
+my $default_email = 'chicks.net@gmail.com';
+
+# read arguments
+my $usage = "usage:\n";
+$usage .= "\tfini-reqs [<filename>]\n";
+$usage .= "where <filename> is a requirements file\n";
+my $argc = scalar @ARGV;
+
+my $reqs_file = 'meta/requirements.txt';
+if ($argc) {
+	$reqs_file = shift @ARGV;
+}
+unless (-e $reqs_file) {
+	warn "no such file $reqs_file";
+}
