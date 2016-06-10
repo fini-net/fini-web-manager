@@ -4,14 +4,12 @@ use strict;
 use warnings;
 use Carp;
 use English;
-#use Data::Dumper;
+use Data::Dumper;
 use Sys::Hostname;
-use JSON;
+use IO::Prompt;
+#use JSON;
 use File::Slurp qw(read_file write_file);
-#use IO::Prompt;
-#use Mojo::Template;
-use AppConfig;
-
+ 
 # constants
 my $host = hostname;
 my $meta_dirname = "/etc/fini";
@@ -29,5 +27,108 @@ if ($argc) {
 	$reqs_file = shift @ARGV;
 }
 unless (-e $reqs_file) {
-	warn "no such file $reqs_file";
+	croak "no such file $reqs_file";
+}
+
+# read requirements
+my $file_raw = read_file($reqs_file);
+my $reqs = process_config($file_raw);
+#print Dumper($reqs);
+
+my @system_packages = @{$reqs->{package}};
+if (defined $reqs->{deb} ) {
+	croak "unimplemented";
+}
+if (defined $reqs->{rpm} ) {
+	croak "unimplemented";
+}
+
+my @perl_packages;
+if (defined $reqs->{Perl} ) {
+	push(@system_packages, translate_perl($reqs->{Perl}) );
+}
+
+my $install_packages = join(' ',@system_packages);
+print "packages: $install_packages\n";
+my $install_count = scalar @system_packages;
+if ($install_count) {
+	if (prompt "install $install_count packages?", -yn1) {
+		my $distro = native_packager();
+		if ($distro eq 'rpm') {
+			croak "unimplemented";
+		} elsif ($distro eq 'deb') {
+			system("sudo apt-get install $install_packages");
+		} else {
+			croak "impossible";
+		}
+	} else {
+		carp "have fun without your unfulfilled requirements";
+	}
+} else {
+	carp "nothing to install";
+}
+
+
+sub translate_perl {
+	my ($perl_modules) = @_;
+	my $distro = native_packager();
+	my @perl_packages;
+
+	my $map = {
+		deb => {
+			DateTime => 'libdatetime-perl',
+		},
+		rpm => {
+			DateTime => 'perl-DateTime',
+		},
+	};
+
+	foreach my $module (@$perl_modules) {
+		if (defined $map->{$distro}->{$module}) {
+			push(@perl_packages,$map->{$distro}->{$module});
+		} else {
+			croak "$module not mapped to system package";
+		}
+	}
+
+	return @perl_packages;
+}
+
+sub native_packager {
+	my $lsb_release = `lsb_release -i`;
+	my @lines = split(/\n/,$lsb_release);
+	foreach my $line (@lines) {
+		next unless $line =~ /^Distributor ID:/;
+		$line =~ s/^Distributor ID:\s*//;
+		my $distro = $line;
+		if ($distro eq 'CentOS') {
+			return 'rpm';
+		} elsif ($distro eq 'Ubuntu') {
+			return 'deb';
+		} else {
+			croak "'$distro' unrecognized";
+		}
+	}
+	croak "no distro found from lsb_release";
+}
+
+sub process_config {
+	my ($raw_config) = @_;
+	my @lines = split(/\n/,$raw_config);
+	my $tree;
+	my $section;
+	foreach my $line (@lines) {
+		if ($line =~ /^\[(.+)\]$/) {
+			$section = $1;
+		} elsif ($line =~ /^[^[]/) {
+			croak "no section yet at $line" unless defined $section;
+			push(@{$tree->{$section}},$line);
+		} elsif (length($line) == 0) {
+			# blank line!
+		} else {
+			croak "line '$line' did not parse";
+		}
+	}
+
+	return $tree;
 }
